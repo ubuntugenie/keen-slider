@@ -144,25 +144,37 @@ export default function Track(
     return idxInRange(abs) ? abs : null
   }
 
+  // Fix #445: abs was wrong in the negative range (each full backward loop
+  // doubled it, e.g. -n reported as -2n). The factor is derived with
+  // floor/ceil depending on the sign instead of mirroring the positive maths,
+  // and quotient/modulo go through round() so they cannot disagree by float
+  // dust at exact loop-multiple positions.
   function getIndexes(pos) {
-    let factor = Math.floor(Math.abs(round(pos / length)))
+    let factor =
+      pos >= 0 ? Math.floor(round(pos / length)) : Math.ceil(round(pos / length))
     let positionRelative = round(((pos % length) + length) % length)
     if (positionRelative === length) {
       positionRelative = 0
     }
-    const positionSign = sign(pos)
-    const origin = relativePositions.indexOf(
-      [...relativePositions].reduce((a, b) =>
-        Math.abs(b - positionRelative) < Math.abs(a - positionRelative) ? b : a
-      )
-    )
+    let origin = 0
+    let minDistance = Math.abs(relativePositions[0] - positionRelative)
+    for (let i = 1; i < relativePositions.length; i++) {
+      const distance = Math.abs(relativePositions[i] - positionRelative)
+      if (distance < minDistance) {
+        minDistance = distance
+        origin = i
+      }
+    }
     let idx = origin
-    if (positionSign < 0) factor++
     if (origin === slidesCount) {
       idx = 0
-      factor += positionSign > 0 ? 1 : -1
+      factor += 1
     }
-    const abs = idx + factor * slidesCount * positionSign
+    const epsilon = 1e-10
+    if (pos < 0 && positionRelative > epsilon) {
+      factor -= 1
+    }
+    const abs = idx + factor * slidesCount
     return {
       abs,
       origin,
@@ -218,7 +230,12 @@ export default function Track(
     idx = Math.round(idx)
     const { abs, rel, origin } = getIndexes(fromPosition)
     const idxRelative = absToRel(idx)
-    const positionRelative = ((fromPosition % length) + length) % length
+    // Fix #445 companion: keep the modulo consistent with getIndexes' rounded
+    // view. The raw modulo can return ~length at exact loop-multiple
+    // positions, cancelling the terms so moveToIdx(idx, true) computed a
+    // distance of 0 and silently dropped the move.
+    let positionRelative = round(((fromPosition % length) + length) % length)
+    if (positionRelative === length) positionRelative = 0
     const distanceToStart = relativePositions[origin]
     const distance = Math.floor((idx - (abs - rel)) / slidesCount) * length
     return round(
